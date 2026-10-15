@@ -1,27 +1,21 @@
 (async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const list = document.getElementById("list");
-  const url = tab && tab.url ? normalizeUrl(tab.url) : "";
   document.getElementById("title").textContent = tab ? tab.title : "";
 
-  document.getElementById("library").addEventListener("click", () => {
-    chrome.tabs.create({ url: chrome.runtime.getURL("library.html") });
-    window.close();
-  });
-
-  const page = url ? await getPage(url) : null;
-  const highlights = page ? [...page.highlights].sort((a, b) => a.pos - b.pos) : [];
-  document.getElementById("count").textContent = highlights.length ? `· ${highlights.length}` : "";
-
+  // Highlights live in the tab itself, so ask its content script for them.
   let status = null;
   try {
     status = await chrome.tabs.sendMessage(tab.id, { type: "status" });
   } catch {}
 
+  const highlights = status ? [...status.highlights].sort((a, b) => a.pos - b.pos) : [];
+  document.getElementById("count").textContent = highlights.length ? `· ${highlights.length}` : "";
+
   const copyBtn = document.getElementById("copy");
   copyBtn.disabled = !highlights.length;
   copyBtn.addEventListener("click", async () => {
-    await navigator.clipboard.writeText(pageToMarkdown({ ...page, highlights }));
+    await navigator.clipboard.writeText(pageToMarkdown({ url: status.url, title: status.title, highlights }));
     copyBtn.textContent = "Copied!";
     setTimeout(() => (copyBtn.textContent = "Copy as Markdown"), 1200);
   });
@@ -29,11 +23,12 @@
   if (!status) {
     list.innerHTML = `<div class="empty">${
       /^https?:|^file:/.test(tab.url || "")
-        ? "Reload this page to start highlighting."
+        ? "Reload this page to start highlighting. Highlights you made in this tab will come back."
         : "Highlighting isn't available on this page."
     }</div>`;
-    if (!highlights.length) return;
-  } else if (!highlights.length) {
+    return;
+  }
+  if (!highlights.length) {
     list.innerHTML = `<div class="empty">
       Select text on the page to highlight it.
       <div class="tips" style="margin-top:10px">
@@ -42,7 +37,7 @@
     return;
   }
 
-  const placed = new Set(status ? status.anchored : []);
+  const placed = new Set(status.anchored);
   for (const h of highlights) {
     const item = document.createElement("div");
     item.className = "item";
@@ -57,7 +52,7 @@
       note.textContent = h.note;
       item.appendChild(note);
     }
-    if (status && !placed.has(h.id)) {
+    if (!placed.has(h.id)) {
       item.classList.add("missing");
       const tag = document.createElement("div");
       tag.className = "tag muted";

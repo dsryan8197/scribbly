@@ -25,6 +25,7 @@
       display: flex; gap: 6px; padding: 10px 14px; border-top: 1px solid var(--border);
     }
     footer .grow { flex: 1; }
+    footer .hint { font-size: 11px; align-self: center; }
     .tips { font-size: 12px; line-height: 1.9; }
   </style>
 </head>
@@ -37,7 +38,7 @@
   <footer>
     <button id="copy">Copy as Markdown</button>
     <span class="grow"></span>
-    <button id="library">Open library</button>
+    <span class="muted hint">Cleared when you close this tab</span>
   </footer>
   <script src="shared.js"></script>
   <script src="popup.js"></script>

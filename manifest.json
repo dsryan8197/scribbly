@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Scribbly — Web Highlighter",
-  "version": "1.0.0",
-  "description": "Highlight and annotate text on any web page. Highlights come back when you revisit, and everything is searchable in one library.",
-  "permissions": ["storage", "unlimitedStorage", "contextMenus", "activeTab", "scripting"],
+  "version": "1.1.0",
+  "description": "Highlight and annotate text on any web page. Highlights stay as long as the tab is open, even across reloads.",
+  "permissions": ["storage", "contextMenus"],
   "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js" },
   "content_scripts": [

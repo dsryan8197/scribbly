@@ -164,9 +164,47 @@
   const failures = new Map(); // id -> failed search count
   let lastColor = "yellow";
 
-  chrome.storage.local.get("settings:lastColor").then((d) => {
+  // After the extension is reloaded, scripts already running in open tabs lose access
+  // to chrome.* APIs and every call throws "Extension context invalidated".
+  function extCall(fn) {
+    try {
+      const p = fn();
+      if (p && p.catch) p.catch(() => {});
+      return p;
+    } catch {
+      return null;
+    }
+  }
+
+  extCall(() => chrome.storage.local.get("settings:lastColor").then((d) => {
     if (d["settings:lastColor"]) lastColor = d["settings:lastColor"];
-  });
+  }));
+
+  // Highlights live in this tab's sessionStorage: they survive reloads (and a Chrome
+  // restart that reopens the tab) and are gone once the tab is closed.
+  const STORE_KEY = "scribbly:pages";
+
+  function readStore() {
+    try {
+      return JSON.parse(sessionStorage.getItem(STORE_KEY)) || {};
+    } catch {
+      return {};
+    }
+  }
+
+  function getPage(url) {
+    return readStore()[url] || null;
+  }
+
+  function savePage(page) {
+    const store = readStore();
+    if (page.highlights.length) store[page.url] = page;
+    else delete store[page.url];
+    try {
+      if (Object.keys(store).length) sessionStorage.setItem(STORE_KEY, JSON.stringify(store));
+      else sessionStorage.removeItem(STORE_KEY);
+    } catch {} // storage blocked (e.g. sandboxed page): highlights just last until reload
+  }
 
   function removeMarks(id) {
     for (const m of anchored.get(id) || []) unwrap(m);
@@ -196,8 +234,8 @@
     }
   }
 
-  async function loadPage() {
-    const page = await getPage(currentUrl);
+  function loadPage() {
+    const page = getPage(currentUrl);
     highlights = page ? page.highlights : [];
     failures.clear();
     syncMarks();
@@ -213,8 +251,8 @@
     anchorPending();
   }
 
-  async function mutatePage(fn) {
-    const page = (await getPage(currentUrl)) || {
+  function mutatePage(fn) {
+    const page = getPage(currentUrl) || {
       url: currentUrl,
       title: document.title,
       highlights: [],
@@ -222,7 +260,8 @@
     page.title = document.title || page.title;
     fn(page);
     highlights = page.highlights;
-    await savePage(page);
+    savePage(page);
+    syncMarks();
   }
 
   function checkUrlChange() {
@@ -253,14 +292,6 @@
   observe();
   setInterval(checkUrlChange, 1000);
 
-  chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== "local") return;
-    const change = changes[pageKey(currentUrl)];
-    if (!change) return;
-    highlights = change.newValue ? change.newValue.highlights : [];
-    syncMarks();
-  });
-
   // ---------------------------------------------------------------------------
   // Actions
   // ---------------------------------------------------------------------------
@@ -277,12 +308,12 @@
     return range;
   }
 
-  async function highlightSelection(color, withNote) {
+  function highlightSelection(color, withNote) {
     const range = selectionRange();
     if (!range) return;
     color = color || lastColor;
     lastColor = color;
-    chrome.storage.local.set({ "settings:lastColor": color });
+    extCall(() => chrome.storage.local.set({ "settings:lastColor": color }));
 
     observer.disconnect();
     let h;
@@ -306,12 +337,12 @@
     }
     window.getSelection().removeAllRanges();
     hideUi();
-    await mutatePage((p) => p.highlights.push(h));
+    mutatePage((p) => p.highlights.push(h));
     if (withNote) openEditor(h.id, true);
   }
 
-  async function updateHighlight(id, patch) {
-    await mutatePage((p) => {
+  function updateHighlight(id, patch) {
+    mutatePage((p) => {
       const h = p.highlights.find((x) => x.id === id);
       if (h) Object.assign(h, patch);
     });
@@ -319,12 +350,12 @@
     if (h && anchored.has(id)) styleMarks(anchored.get(id), h);
   }
 
-  async function deleteHighlight(id) {
+  function deleteHighlight(id) {
     observer.disconnect();
     removeMarks(id);
     observe();
     hideUi();
-    await mutatePage((p) => {
+    mutatePage((p) => {
       p.highlights = p.highlights.filter((x) => x.id !== id);
     });
   }
@@ -551,7 +582,7 @@
     else if (msg.type === "note-selection") highlightSelection(null, true);
     else if (msg.type === "scroll-to") sendResponse({ ok: scrollToHighlight(msg.id) });
     else if (msg.type === "status") {
-      sendResponse({ url: currentUrl, anchored: [...anchored.keys()] });
+      sendResponse({ url: currentUrl, title: document.title, highlights, anchored: [...anchored.keys()] });
     }
   });
 
