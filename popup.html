@@ -1,0 +1,37 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="ui.css">
+  <style>
+    body { width: 360px; max-height: 560px; display: flex; flex-direction: column; }
+    header { padding: 12px 14px 10px; border-bottom: 1px solid var(--border); }
+    .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+    .brand img { width: 18px; height: 18px; }
+    .page-title { margin-top: 4px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    main { overflow-y: auto; padding: 6px 8px; flex: 1; }
+    .item { padding: 8px 6px; border-radius: 8px; cursor: pointer; }
+    .item:hover { background: var(--bg-soft); }
+    .item .quote { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+    .item.missing { opacity: .55; }
+    .item .tag { font-size: 11px; margin-top: 4px; }
+    footer { display: flex; gap: 6px; padding: 10px 14px; border-top: 1px solid var(--border); }
+    footer .grow { flex: 1; }
+    .tips { font-size: 12px; line-height: 1.9; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand"><img src="icons/32.png" alt="">Margin <span class="muted" id="count" style="font-weight:400"></span></div>
+    <div class="page-title muted" id="title"></div>
+  </header>
+  <main id="list"></main>
+  <footer>
+    <button id="copy">Copy as Markdown</button>
+    <span class="grow"></span>
+    <button id="library">Open library</button>
+  </footer>
+  <script src="shared.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
