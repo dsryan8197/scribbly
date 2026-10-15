@@ -176,9 +176,13 @@
     }
   }
 
-  extCall(() => chrome.storage.local.get("settings:lastColor").then((d) => {
-    if (d["settings:lastColor"]) lastColor = d["settings:lastColor"];
-  }));
+  let colorLoad = null;
+  function loadLastColor() {
+    colorLoad = colorLoad || (extCall(() => chrome.storage.local.get("settings:lastColor").then((d) => {
+      if (d["settings:lastColor"]) lastColor = d["settings:lastColor"];
+    })) || Promise.resolve());
+    return colorLoad;
+  }
 
   // Highlights live in this tab's sessionStorage: they survive reloads (and a Chrome
   // restart that reopens the tab) and are gone once the tab is closed.
@@ -223,11 +227,25 @@
     if (!pending.length) return;
     observer.disconnect();
     try {
+      // Read the page once and find every pending highlight in that one copy.
+      let index = buildIndex();
+      const normed = normalizeIndex(index);
+      const found = [];
       for (const h of pending) {
-        const index = buildIndex();
-        const off = findOffsets(h, index, normalizeIndex(index));
-        if (off) anchored.set(h.id, wrapOffsets(index, off.start, off.end, h));
+        const off = findOffsets(h, index, normed);
+        if (off) found.push({ h, off });
         else failures.set(h.id, (failures.get(h.id) || 0) + 1);
+      }
+      // Wrap from the end of the page backwards: splitting text for a later highlight
+      // leaves the offsets of earlier ones untouched, so the one index stays valid.
+      found.sort((a, b) => b.off.start - a.off.start);
+      let wrappedFrom = Infinity;
+      for (const { h, off } of found) {
+        // Overlaps a highlight just wrapped (rare): re-read the page's text nodes.
+        // Wrapping never changes the text itself, so the offsets still hold.
+        if (off.end > wrappedFrom) index = buildIndex();
+        anchored.set(h.id, wrapOffsets(index, off.start, off.end, h));
+        wrappedFrom = Math.min(wrappedFrom, off.start);
       }
     } finally {
       observe();
@@ -239,6 +257,7 @@
     highlights = page ? page.highlights : [];
     failures.clear();
     syncMarks();
+    watchUrl();
   }
 
   // Bring the DOM in line with `highlights` (after a load or a storage change).
@@ -262,6 +281,7 @@
     highlights = page.highlights;
     savePage(page);
     syncMarks();
+    watchUrl();
   }
 
   function checkUrlChange() {
@@ -290,7 +310,13 @@
     if (document.body && highlights.length) observer.observe(document.body, { childList: true, subtree: true, characterData: true });
   }
   observe();
-  setInterval(checkUrlChange, 1000);
+
+  // Single-page apps change the URL without reloading. That only matters once this
+  // tab has highlights; until then, actions call checkUrlChange() themselves.
+  let urlTimer = null;
+  function watchUrl() {
+    if (!urlTimer && Object.keys(readStore()).length) urlTimer = setInterval(checkUrlChange, 1000);
+  }
 
   // ---------------------------------------------------------------------------
   // Actions
@@ -309,6 +335,7 @@
   }
 
   function highlightSelection(color, withNote) {
+    checkUrlChange();
     const range = selectionRange();
     if (!range) return;
     color = color || lastColor;
@@ -376,61 +403,11 @@
   // Floating UI (in a shadow root so page CSS can't touch it)
   // ---------------------------------------------------------------------------
 
-  const host = document.createElement("div");
-  host.setAttribute("data-margin-ui", "");
-  host.style.cssText = "all: initial; position: fixed; top: 0; left: 0; z-index: 2147483647;";
-  const shadow = host.attachShadow({ mode: "closed" });
-  shadow.innerHTML = `
-    <style>
-      :host { all: initial; }
-      .panel {
-        position: fixed; display: none; align-items: center; gap: 6px;
-        padding: 6px 8px; border-radius: 10px;
-        background: #202124; color: #f1f1f1;
-        box-shadow: 0 6px 24px rgba(0,0,0,.28), 0 0 0 1px rgba(255,255,255,.06);
-        font: 13px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      }
-      .panel.show { display: flex; }
-      .editor { flex-direction: column; align-items: stretch; width: 280px; gap: 8px; padding: 10px; }
-      .row { display: flex; align-items: center; gap: 6px; }
-      .dot {
-        width: 18px; height: 18px; border-radius: 50%; border: 2px solid transparent;
-        cursor: pointer; padding: 0; flex: none;
-      }
-      .dot:hover { transform: scale(1.12); }
-      .dot.active { border-color: #fff; }
-      .sep { width: 1px; height: 18px; background: rgba(255,255,255,.18); margin: 0 2px; }
-      button.txt {
-        all: unset; cursor: pointer; padding: 3px 7px; border-radius: 6px; color: #e8e8e8;
-        font: inherit;
-      }
-      button.txt:hover { background: rgba(255,255,255,.12); }
-      button.danger:hover { background: rgba(239,68,68,.3); }
-      .spacer { flex: 1; }
-      textarea {
-        all: unset; box-sizing: border-box; width: 100%; min-height: 64px; max-height: 200px;
-        padding: 7px 8px; border-radius: 6px; background: #2d2e31; color: #f1f1f1;
-        font: inherit; white-space: pre-wrap; overflow-y: auto;
-      }
-      textarea::placeholder { color: #8a8b8e; }
-      .hint { color: #8a8b8e; font-size: 11px; }
-    </style>
-    <div class="panel toolbar" part="toolbar"></div>
-    <div class="panel editor">
-      <div class="row colors"></div>
-      <textarea placeholder="Add a note…"></textarea>
-      <div class="row">
-        <span class="hint">Esc to close</span>
-        <span class="spacer"></span>
-        <button class="txt copy">Copy</button>
-        <button class="txt danger delete">Delete</button>
-      </div>
-    </div>`;
-  const toolbar = shadow.querySelector(".toolbar");
-  const editor = shadow.querySelector(".editor");
-  const editorColors = editor.querySelector(".colors");
-  const noteBox = editor.querySelector("textarea");
+  // Built the first time it's needed, so pages you never select text on don't pay for it.
+  let host = null;
+  let toolbar, editor, editorColors, noteBox;
   let editingId = null;
+  let noteTimer = null;
 
   function dot(color, onClick) {
     const b = document.createElement("button");
@@ -442,57 +419,120 @@
     return b;
   }
 
-  for (const c of Object.keys(MARGIN_COLORS)) {
-    toolbar.appendChild(dot(c, () => highlightSelection(c, false)));
-    editorColors.appendChild(dot(c, () => {
-      if (!editingId) return;
-      lastColor = c;
-      updateHighlight(editingId, { color: c });
-      editorColors.querySelectorAll(".dot").forEach((d) => d.classList.toggle("active", d.dataset.color === c));
-    }));
-  }
-  toolbar.appendChild(Object.assign(document.createElement("span"), { className: "sep" }));
-  const noteBtn = document.createElement("button");
-  noteBtn.className = "txt";
-  noteBtn.textContent = "+ Note";
-  noteBtn.addEventListener("click", () => highlightSelection(null, true));
-  toolbar.appendChild(noteBtn);
+  function buildUi() {
+    if (host) return;
+    host = document.createElement("div");
+    host.setAttribute("data-margin-ui", "");
+    host.style.cssText = "all: initial; position: fixed; top: 0; left: 0; z-index: 2147483647;";
+    const shadow = host.attachShadow({ mode: "closed" });
+    shadow.innerHTML = `
+      <style>
+        :host { all: initial; }
+        .panel {
+          position: fixed; display: none; align-items: center; gap: 6px;
+          padding: 6px 8px; border-radius: 10px;
+          background: #202124; color: #f1f1f1;
+          box-shadow: 0 6px 24px rgba(0,0,0,.28), 0 0 0 1px rgba(255,255,255,.06);
+          font: 13px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+        .panel.show { display: flex; }
+        .editor { flex-direction: column; align-items: stretch; width: 280px; gap: 8px; padding: 10px; }
+        .row { display: flex; align-items: center; gap: 6px; }
+        .dot {
+          width: 18px; height: 18px; border-radius: 50%; border: 2px solid transparent;
+          cursor: pointer; padding: 0; flex: none;
+        }
+        .dot:hover { transform: scale(1.12); }
+        .dot.active { border-color: #fff; }
+        .sep { width: 1px; height: 18px; background: rgba(255,255,255,.18); margin: 0 2px; }
+        button.txt {
+          all: unset; cursor: pointer; padding: 3px 7px; border-radius: 6px; color: #e8e8e8;
+          font: inherit;
+        }
+        button.txt:hover { background: rgba(255,255,255,.12); }
+        button.danger:hover { background: rgba(239,68,68,.3); }
+        .spacer { flex: 1; }
+        textarea {
+          all: unset; box-sizing: border-box; width: 100%; min-height: 64px; max-height: 200px;
+          padding: 7px 8px; border-radius: 6px; background: #2d2e31; color: #f1f1f1;
+          font: inherit; white-space: pre-wrap; overflow-y: auto;
+        }
+        textarea::placeholder { color: #8a8b8e; }
+        .hint { color: #8a8b8e; font-size: 11px; }
+      </style>
+      <div class="panel toolbar" part="toolbar"></div>
+      <div class="panel editor">
+        <div class="row colors"></div>
+        <textarea placeholder="Add a note…"></textarea>
+        <div class="row">
+          <span class="hint">Esc to close</span>
+          <span class="spacer"></span>
+          <button class="txt copy">Copy</button>
+          <button class="txt danger delete">Delete</button>
+        </div>
+      </div>`;
+    toolbar = shadow.querySelector(".toolbar");
+    editor = shadow.querySelector(".editor");
+    editorColors = editor.querySelector(".colors");
+    noteBox = editor.querySelector("textarea");
 
-  // Keep the page selection alive while clicking toolbar buttons.
-  shadow.addEventListener("mousedown", (e) => {
-    if (e.target.tagName !== "TEXTAREA") e.preventDefault();
-    e.stopPropagation();
-  });
-
-  let noteTimer = null;
-  noteBox.addEventListener("input", () => {
-    const id = editingId;
-    const note = noteBox.value;
-    clearTimeout(noteTimer);
-    noteTimer = setTimeout(() => updateHighlight(id, { note: note.trim() }), 300);
-  });
-  noteBox.addEventListener("keydown", (e) => {
-    e.stopPropagation();
-    if (e.key === "Escape" || (e.key === "Enter" && (e.metaKey || e.ctrlKey))) {
-      e.preventDefault();
-      closeEditor();
+    for (const c of Object.keys(MARGIN_COLORS)) {
+      toolbar.appendChild(dot(c, () => highlightSelection(c, false)));
+      editorColors.appendChild(dot(c, () => {
+        if (!editingId) return;
+        lastColor = c;
+        updateHighlight(editingId, { color: c });
+        editorColors.querySelectorAll(".dot").forEach((d) => d.classList.toggle("active", d.dataset.color === c));
+      }));
     }
-  });
-  // Stop sites with global keyboard shortcuts from hijacking typing in the note.
-  ["keyup", "keypress"].forEach((t) => noteBox.addEventListener(t, (e) => e.stopPropagation()));
+    toolbar.appendChild(Object.assign(document.createElement("span"), { className: "sep" }));
+    const noteBtn = document.createElement("button");
+    noteBtn.className = "txt";
+    noteBtn.textContent = "+ Note";
+    noteBtn.addEventListener("click", () => highlightSelection(null, true));
+    toolbar.appendChild(noteBtn);
 
-  editor.querySelector(".copy").addEventListener("click", async () => {
-    const h = highlights.find((x) => x.id === editingId);
-    if (!h) return;
-    const text = h.note ? `"${squash(h.exact)}"\n\nNote: ${h.note}` : squash(h.exact);
-    await navigator.clipboard.writeText(text).catch(() => {});
-    const btn = editor.querySelector(".copy");
-    btn.textContent = "Copied";
-    setTimeout(() => (btn.textContent = "Copy"), 1000);
-  });
-  editor.querySelector(".delete").addEventListener("click", () => {
-    if (editingId) deleteHighlight(editingId);
-  });
+    // Keep the page selection alive while clicking toolbar buttons.
+    shadow.addEventListener("mousedown", (e) => {
+      if (e.target.tagName !== "TEXTAREA") e.preventDefault();
+      e.stopPropagation();
+    });
+
+    noteBox.addEventListener("input", () => {
+      const id = editingId;
+      const note = noteBox.value;
+      clearTimeout(noteTimer);
+      noteTimer = setTimeout(() => updateHighlight(id, { note: note.trim() }), 300);
+    });
+    noteBox.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Escape" || (e.key === "Enter" && (e.metaKey || e.ctrlKey))) {
+        e.preventDefault();
+        closeEditor();
+      }
+    });
+    // Stop sites with global keyboard shortcuts from hijacking typing in the note.
+    ["keyup", "keypress"].forEach((t) => noteBox.addEventListener(t, (e) => e.stopPropagation()));
+
+    editor.querySelector(".copy").addEventListener("click", async () => {
+      const h = highlights.find((x) => x.id === editingId);
+      if (!h) return;
+      const text = h.note ? `"${squash(h.exact)}"\n\nNote: ${h.note}` : squash(h.exact);
+      await navigator.clipboard.writeText(text).catch(() => {});
+      const btn = editor.querySelector(".copy");
+      btn.textContent = "Copied";
+      setTimeout(() => (btn.textContent = "Copy"), 1000);
+    });
+    editor.querySelector(".delete").addEventListener("click", () => {
+      if (editingId) deleteHighlight(editingId);
+    });
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") hideUi();
+    });
+    window.addEventListener("scroll", () => toolbar.classList.remove("show"), { passive: true });
+    loadLastColor();
+  }
 
   function mountHost() {
     if (!host.isConnected) document.documentElement.appendChild(host);
@@ -510,6 +550,7 @@
   }
 
   function showToolbar(range) {
+    buildUi();
     mountHost();
     closeEditor();
     toolbar.classList.add("show");
@@ -522,6 +563,7 @@
     const h = highlights.find((x) => x.id === id);
     const marks = anchored.get(id);
     if (!h || !marks || !marks.length) return;
+    buildUi();
     mountHost();
     toolbar.classList.remove("show");
     editingId = id;
@@ -533,6 +575,7 @@
   }
 
   function closeEditor() {
+    if (!editor) return;
     if (editingId && noteTimer) {
       clearTimeout(noteTimer);
       noteTimer = null;
@@ -543,21 +586,22 @@
   }
 
   function hideUi() {
+    if (!toolbar) return;
     toolbar.classList.remove("show");
     closeEditor();
   }
 
   document.addEventListener("mouseup", (e) => {
-    if (e.composedPath().includes(host)) return;
+    if (host && e.composedPath().includes(host)) return;
     setTimeout(() => {
       const range = selectionRange();
       if (range) showToolbar(range);
-      else toolbar.classList.remove("show");
+      else if (toolbar) toolbar.classList.remove("show");
     }, 10);
   });
 
   document.addEventListener("mousedown", (e) => {
-    if (!e.composedPath().includes(host)) hideUi();
+    if (!host || !e.composedPath().includes(host)) hideUi();
   });
 
   document.addEventListener("click", (e) => {
@@ -568,20 +612,16 @@
     openEditor(mark.dataset.marginId, false);
   });
 
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") hideUi();
-  });
-  window.addEventListener("scroll", () => toolbar.classList.remove("show"), { passive: true });
-
   // ---------------------------------------------------------------------------
   // Messages from the popup / background (keyboard shortcuts, context menu)
   // ---------------------------------------------------------------------------
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    if (msg.type === "highlight-selection") highlightSelection(null, false);
-    else if (msg.type === "note-selection") highlightSelection(null, true);
+    if (msg.type === "highlight-selection") loadLastColor().then(() => highlightSelection(null, false));
+    else if (msg.type === "note-selection") loadLastColor().then(() => highlightSelection(null, true));
     else if (msg.type === "scroll-to") sendResponse({ ok: scrollToHighlight(msg.id) });
     else if (msg.type === "status") {
+      checkUrlChange();
       sendResponse({ url: currentUrl, title: document.title, highlights, anchored: [...anchored.keys()] });
     }
   });
