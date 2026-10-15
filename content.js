@@ -158,6 +158,10 @@
   let currentUrl = normalizeUrl(location.href);
   let highlights = []; // highlights stored for this page
   const anchored = new Map(); // id -> [mark elements]
+  // Each search rescans the whole page, so give up on a highlight that keeps failing
+  // (its text was edited away) instead of searching on every DOM change forever.
+  const MAX_TRIES = 5;
+  const failures = new Map(); // id -> failed search count
   let lastColor = "yellow";
 
   chrome.storage.local.get("settings:lastColor").then((d) => {
@@ -177,7 +181,7 @@
         anchored.delete(id);
       }
     }
-    const pending = highlights.filter((h) => !anchored.has(h.id));
+    const pending = highlights.filter((h) => !anchored.has(h.id) && (failures.get(h.id) || 0) < MAX_TRIES);
     if (!pending.length) return;
     observer.disconnect();
     try {
@@ -185,6 +189,7 @@
         const index = buildIndex();
         const off = findOffsets(h, index, normalizeIndex(index));
         if (off) anchored.set(h.id, wrapOffsets(index, off.start, off.end, h));
+        else failures.set(h.id, (failures.get(h.id) || 0) + 1);
       }
     } finally {
       observe();
@@ -194,6 +199,7 @@
   async function loadPage() {
     const page = await getPage(currentUrl);
     highlights = page ? page.highlights : [];
+    failures.clear();
     syncMarks();
   }
 
@@ -240,8 +246,9 @@
       anchorPending();
     }, 500);
   });
+  // Only pages with saved highlights need watching; URL changes are caught by the interval.
   function observe() {
-    if (document.body) observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    if (document.body && highlights.length) observer.observe(document.body, { childList: true, subtree: true, characterData: true });
   }
   observe();
   setInterval(checkUrlChange, 1000);
