@@ -1,4 +1,4 @@
-# Margin — web highlighter
+# Scribbly — web highlighter
 
 Highlight and annotate text on any web page. Highlights reappear when you come back, and every highlight is searchable in one library.
 
@@ -8,7 +8,7 @@ Highlight and annotate text on any web page. Highlights reappear when you come b
 2. Open `chrome://extensions` (in Brave use `brave://extensions`; in Edge use `edge://extensions`).
 3. Turn on **Developer mode** (top right).
 4. Click **Load unpacked** and choose the `margin` folder.
-5. Pin the extension: click the puzzle-piece icon in the toolbar, then the pin next to Margin.
+5. Pin the extension: click the puzzle-piece icon in the toolbar, then the pin next to Scribbly.
 6. Reload any tabs that were already open.
 
 ## Use

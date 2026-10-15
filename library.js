@@ -185,7 +185,7 @@ $("menu").addEventListener("click", async (e) => {
   } else if (act === "json") {
     const all = await chrome.storage.local.get(null);
     const pages = Object.fromEntries(Object.entries(all).filter(([k]) => k.startsWith(PAGE_PREFIX)));
-    download(`margin-backup-${stamp}.json`, JSON.stringify({ app: "margin", version: 1, pages }, null, 2), "application/json");
+    download(`scribbly-backup-${stamp}.json`, JSON.stringify({ app: "margin", version: 1, pages }, null, 2), "application/json");
   } else if (act === "import") {
     $("importFile").click();
   }
@@ -196,7 +196,7 @@ $("importFile").addEventListener("change", async (e) => {
   if (!file) return;
   try {
     const data = JSON.parse(await file.text());
-    if (data.app !== "margin" || !data.pages) throw new Error("Not a Margin backup file.");
+    if (data.app !== "margin" || !data.pages) throw new Error("Not a Scribbly backup file.");
     // Merge: keep existing highlights, add any from the backup that aren't present.
     let added = 0;
     for (const incoming of Object.values(data.pages)) {
